@@ -9,6 +9,7 @@ TWEAK_NAME = TelegramBGDownloader
 
 TelegramBGDownloader_FILES = Tweak.x
 TelegramBGDownloader_CFLAGS = -fobjc-arc
+TelegramBGDownloader_FRAMEWORKS = UIKit Foundation AVFoundation
 
 INSTALL_TARGET_PROCESSES = Telegram
 
