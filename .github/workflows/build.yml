@@ -17,6 +17,8 @@ jobs:
 
       - name: Setup Theos
         uses: Randomblock1/theos-action@v1
+        with:
+          theos-src: 'https://github.com/RootHide/theos'
 
       - name: Build Package
         run: |
