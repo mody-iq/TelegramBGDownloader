@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
+#import <objc/runtime.h>
 
 // Forward declaration for SpringBoard private classes
 @interface FBProcess : NSObject
@@ -60,17 +61,15 @@
     [audioSession setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:nil];
     [audioSession setActive:YES error:nil];
 
-    // Create a silent audio player (using a very short silent WAV file data)
-    // This is a minimal silent WAV file (44 bytes header + 0 bytes data)
+    // Minimal silent WAV file header (44 bytes)
     NSData *silentAudioData = [NSData dataWithBytes:"\x52\x49\x46\x46\x24\x08\x00\x00\x57\x41\x56\x45\x66\x6d\x74\x20\x10\x00\x00\x00\x01\x00\x01\x00\x44\xac\x00\x00\x88\x58\x01\x00\x02\x00\x10\x00\x64\x61\x74\x61\x00\x08\x00\x00\x00\x00\x00\x00\x00\x00" length:44];
     
     AVAudioPlayer *audioPlayer = [[AVAudioPlayer alloc] initWithData:silentAudioData error:nil];
     audioPlayer.numberOfLoops = -1; // Loop forever
     [audioPlayer play];
     
-    // Keep a strong reference to the audio player to prevent it from being deallocated
-    static AVAudioPlayer *sharedAudioPlayer = nil;
-    sharedAudioPlayer = audioPlayer;
+    // Retain the audio player using associated object to prevent deallocation
+    objc_setAssociatedObject(self, "TelegramBGDownloaderAudioPlayer", audioPlayer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 %end
