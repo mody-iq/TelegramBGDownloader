@@ -1,17 +1,25 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
+@interface UIApplication (TelegramBGDownloader)
+- (void)extendBackgroundTask:(UIApplication *)application;
+@end
+
 %hook UIApplication
 
 - (void)applicationDidEnterBackground:(UIApplication *)application {
     %orig;
-    
-    // Start a background task to prevent the app from suspending immediately
-    // This gives Telegram extra time to finish active downloads
+    [self extendBackgroundTask:application];
+}
+
+%new
+- (void)extendBackgroundTask:(UIApplication *)application {
     __block UIBackgroundTaskIdentifier bgTask = UIBackgroundTaskInvalid;
-    bgTask = [application beginBackgroundTaskWithName:@"TelegramBGDownloaderTask" expirationHandler:^{
+    bgTask = [application beginBackgroundTaskWithName:@"TelegramBGDownloader_KeepAlive" expirationHandler:^{
         [application endBackgroundTask:bgTask];
         bgTask = UIBackgroundTaskInvalid;
+        // Restart the task recursively to keep the app alive in the background
+        [self extendBackgroundTask:application];
     }];
 }
 
