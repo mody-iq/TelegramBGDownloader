@@ -1,6 +1,22 @@
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 
-// Step 1: Basic Scaffold - No logic implemented yet.
+%hook UIApplication
+
+- (void)applicationDidEnterBackground:(UIApplication *)application {
+    %orig;
+    
+    // Start a background task to prevent the app from suspending immediately
+    // This gives Telegram extra time to finish active downloads
+    __block UIBackgroundTaskIdentifier bgTask = UIBackgroundTaskInvalid;
+    bgTask = [application beginBackgroundTaskWithName:@"TelegramBGDownloaderTask" expirationHandler:^{
+        [application endBackgroundTask:bgTask];
+        bgTask = UIBackgroundTaskInvalid;
+    }];
+}
+
+%end
+
 %ctor {
-    // Initialization will go here in later steps.
+    %init;
 }
