@@ -10,4 +10,6 @@ TWEAK_NAME = TelegramBGDownloader
 TelegramBGDownloader_FILES = Tweak.x
 TelegramBGDownloader_CFLAGS = -fobjc-arc
 
+INSTALL_TARGET_PROCESSES = Telegram
+
 include $(THEOS_MAKE_PATH)/tweak.mk
