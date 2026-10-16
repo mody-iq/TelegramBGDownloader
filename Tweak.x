@@ -1,91 +1,178 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
-#import <objc/runtime.h>
+#import <string.h>
 
-// Forward declaration for SpringBoard private classes
-@interface FBProcess : NSObject
-@property (nonatomic, retain) NSString *bundleIdentifier;
-- (void)setState:(NSInteger)state;
+typedef struct __attribute__((packed)) {
+    char     riff[4];
+    uint32_t chunkSize;
+    char     wave[4];
+    char     fmt[4];
+    uint32_t fmtSize;
+    uint16_t audioFormat;
+    uint16_t channels;
+    uint32_t sampleRate;
+    uint32_t byteRate;
+    uint16_t blockAlign;
+    uint16_t bitsPerSample;
+    char     data[4];
+    uint32_t dataSize;
+} TGBGWavHeader;
+
+@interface TGBGKeeper : NSObject
++ (instancetype)shared;
+- (void)observe;
 @end
 
-// ==========================================
-// Group 1: SpringBoard Anti-Suspension
-// ==========================================
-%group SpringBoardHooks
+@implementation TGBGKeeper {
+    AVAudioPlayer *_player;
+    UIBackgroundTaskIdentifier _bgTask;
+    NSTimer *_timer;
+    BOOL _active;
+}
 
-%hook FBProcess
-- (void)setState:(NSInteger)state {
-    // Prevent Telegram from being suspended or terminated by the system
-    if ([self.bundleIdentifier isEqualToString:@"ph.telegra"] && state >= 4) {
-        return; 
++ (instancetype)shared {
+    static TGBGKeeper *instance = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        instance = [[TGBGKeeper alloc] init];
+    });
+    return instance;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _bgTask = UIBackgroundTaskInvalid;
+        _active = NO;
     }
-    %orig;
+    return self;
 }
-%end
 
-%end // End SpringBoardHooks
+- (void)observe {
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+    [nc addObserver:self selector:@selector(appDidEnterBackground)
+               name:UIApplicationDidEnterBackgroundNotification object:nil];
+    [nc addObserver:self selector:@selector(appWillEnterForeground)
+               name:UIApplicationWillEnterForegroundNotification object:nil];
+    [nc addObserver:self selector:@selector(audioInterrupted:)
+               name:AVAudioSessionInterruptionNotification object:nil];
+    [nc addObserver:self selector:@selector(mediaServicesReset)
+               name:AVAudioSessionMediaServicesWereResetNotification object:nil];
+}
 
-// ==========================================
-// Group 2: Telegram App Background Extension
-// ==========================================
-%group TelegramHooks
+- (NSData *)silentWAV {
+    const uint32_t sampleRate = 8000;
+    const uint32_t dataSize = sampleRate * 2; // 1 second, 16-bit mono
 
-@interface UIApplication (TelegramBGDownloader)
-- (void)extendBackgroundTask:(UIApplication *)application;
-- (void)startSilentAudio;
+    TGBGWavHeader h;
+    memset(&h, 0, sizeof(h));
+    memcpy(h.riff, "RIFF", 4);
+    h.chunkSize = 36 + dataSize;
+    memcpy(h.wave, "WAVE", 4);
+    memcpy(h.fmt, "fmt ", 4);
+    h.fmtSize = 16;
+    h.audioFormat = 1;
+    h.channels = 1;
+    h.sampleRate = sampleRate;
+    h.byteRate = sampleRate * 2;
+    h.blockAlign = 2;
+    h.bitsPerSample = 16;
+    memcpy(h.data, "data", 4);
+    h.dataSize = dataSize;
+
+    NSMutableData *d = [NSMutableData dataWithBytes:&h length:sizeof(h)];
+    [d increaseLengthBy:dataSize]; // zero-filled = silence
+    return d;
+}
+
+- (void)configureSession {
+    AVAudioSession *s = [AVAudioSession sharedInstance];
+    NSString *cat = s.category;
+    if (![cat isEqualToString:AVAudioSessionCategoryPlayback] &&
+        ![cat isEqualToString:AVAudioSessionCategoryPlayAndRecord]) {
+        [s setCategory:AVAudioSessionCategoryPlayback
+           withOptions:AVAudioSessionCategoryOptionMixWithOthers
+                 error:nil];
+    }
+    [s setActive:YES error:nil];
+}
+
+- (void)ensurePlaying {
+    if (!_active) return;
+    [self configureSession];
+    if (!_player) {
+        NSError *err = nil;
+        _player = [[AVAudioPlayer alloc] initWithData:[self silentWAV]
+                                         fileTypeHint:AVFileTypeWAVE
+                                                error:&err];
+        if (!_player) return;
+        _player.numberOfLoops = -1;
+        [_player prepareToPlay];
+    }
+    if (!_player.isPlaying) {
+        [_player play];
+    }
+}
+
+- (void)endTask {
+    if (_bgTask != UIBackgroundTaskInvalid) {
+        [[UIApplication sharedApplication] endBackgroundTask:_bgTask];
+        _bgTask = UIBackgroundTaskInvalid;
+    }
+}
+
+- (void)appDidEnterBackground {
+    _active = YES;
+    if (_bgTask == UIBackgroundTaskInvalid) {
+        __weak TGBGKeeper *weakSelf = self;
+        _bgTask = [[UIApplication sharedApplication]
+            beginBackgroundTaskWithName:@"TGBGDownloaderKeepAlive"
+                      expirationHandler:^{
+            [weakSelf endTask];
+        }];
+    }
+    [self ensurePlaying];
+    if (!_timer) {
+        _timer = [NSTimer scheduledTimerWithTimeInterval:5.0
+                                                  target:self
+                                                selector:@selector(tick)
+                                                userInfo:nil
+                                                 repeats:YES];
+    }
+}
+
+- (void)appWillEnterForeground {
+    _active = NO;
+    [_timer invalidate];
+    _timer = nil;
+    [_player stop];
+    _player = nil;
+    [self endTask];
+}
+
+- (void)tick {
+    [self ensurePlaying];
+}
+
+- (void)audioInterrupted:(NSNotification *)note {
+    NSUInteger type = [note.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue];
+    if (type == AVAudioSessionInterruptionTypeEnded) {
+        [self ensurePlaying];
+    }
+}
+
+- (void)mediaServicesReset {
+    _player = nil;
+    [self ensurePlaying];
+}
+
 @end
 
-%hook UIApplication
-
-- (void)applicationDidEnterBackground:(UIApplication *)application {
-    %orig;
-    [self extendBackgroundTask:application];
-    [self startSilentAudio];
-}
-
-%new
-- (void)extendBackgroundTask:(UIApplication *)application {
-    __block UIBackgroundTaskIdentifier bgTask = UIBackgroundTaskInvalid;
-    bgTask = [application beginBackgroundTaskWithName:@"TelegramBGDownloader_KeepAlive" expirationHandler:^{
-        [application endBackgroundTask:bgTask];
-        bgTask = UIBackgroundTaskInvalid;
-        [self extendBackgroundTask:application];
-    }];
-}
-
-%new
-- (void)startSilentAudio {
-    // Create a silent audio session and player to keep the app alive
-    AVAudioSession *audioSession = [AVAudioSession sharedInstance];
-    [audioSession setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:nil];
-    [audioSession setActive:YES error:nil];
-
-    // Minimal silent WAV file header (44 bytes)
-    NSData *silentAudioData = [NSData dataWithBytes:"\x52\x49\x46\x46\x24\x08\x00\x00\x57\x41\x56\x45\x66\x6d\x74\x20\x10\x00\x00\x00\x01\x00\x01\x00\x44\xac\x00\x00\x88\x58\x01\x00\x02\x00\x10\x00\x64\x61\x74\x61\x00\x08\x00\x00\x00\x00\x00\x00\x00\x00" length:44];
-    
-    AVAudioPlayer *audioPlayer = [[AVAudioPlayer alloc] initWithData:silentAudioData error:nil];
-    audioPlayer.numberOfLoops = -1; // Loop forever
-    [audioPlayer play];
-    
-    // Retain the audio player using associated object to prevent deallocation
-    objc_setAssociatedObject(self, "TelegramBGDownloaderAudioPlayer", audioPlayer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-}
-
-%end
-
-%end // End TelegramHooks
-
-// ==========================================
-// Constructor: Conditional Initialization
-// ==========================================
 %ctor {
-    NSBundle *currentBundle = [NSBundle mainBundle];
-    NSString *bundleID = [currentBundle bundleIdentifier];
-    
-    if ([bundleID isEqualToString:@"ph.telegra"]) {
-        %init(TelegramHooks);
-    } else if ([bundleID isEqualToString:@"com.apple.springboard"]) {
-        %init(SpringBoardHooks);
+    @autoreleasepool {
+        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+        if (![bundleID isEqualToString:@"ph.telegra.Telegraph"]) return;
+        [[TGBGKeeper shared] observe];
     }
 }
