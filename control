@@ -1,9 +1,9 @@
 Package: com.yourname.telegrambgdownloader
 Name: TelegramBGDownloader
-Depends: mobilesubstrate
-Version: 1.0.0
-Architecture: iphoneos-arm64
-Description: Keep Telegram downloads alive in the background on iOS 18.
+Depends: mobilesubstrate | ellekit
+Version: 1.1.0
+Architecture: iphoneos-arm64e
+Description: Keep Telegram downloads alive in the background on iOS 15 - 17 (RootHide / Relaxin).
 Maintainer: mody
 Author: mody
 Section: Tweaks
